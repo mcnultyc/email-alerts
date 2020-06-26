@@ -40,7 +40,24 @@ class EmailSearcher:
     self.keywords = keywords
     self.number = number
     self.carrier = carrier
+ 
   
+  def decode_header(self, header):
+    
+    decoded_parts = email.header.decode_header(header)
+    
+    if len(decoded_parts) > 0:
+      # Only decode first part of header
+      decoded, charset = decoded_parts[0]
+      
+      # Check for utf-8 encoding
+      if charset != None:
+        # Decode header
+        decoded = decoded.decode(charset)
+      return decoded
+    
+    return ""
+ 
   
   def get_text(self, msg):
     
@@ -54,23 +71,31 @@ class EmailSearcher:
       if part.get_content_maintype() == "text":
         body += part.get_payload()
 
+    # Get the transfer encoding used
     transfer_encoding = msg.get("Content-transfer-encoding")      
-    if transfer_encoding and transfer_encoding.lower() == "base64":
-      # Base64 transfer decoding
-      body = base64.b64decode(body)  
+    if transfer_encoding:
+      # Decode transfer encoding header
+      transfer_encoding = self.decode_header(transfer_encoding)
+      if transfer_encoding.lower() == "base64":
+        # Base64 transfer decoding
+        body = base64.b64decode(body)  
       
     # Quoted-printable transfer decoding
-    html = quopri.decodestring(body).decode("utf-8")
+    html = quopri.decodestring(body).decode("utf-8", "ignore")
     
-    # Create document from html
-    document = lxml.html.document_fromstring(html)
+    # Check if body is empty
+    if html.strip() != "":
+      # Create document from html
+      document = lxml.html.document_fromstring(html)
     
-    # Clean html and get text
-    text = "\n".join(etree.XPath("//text()")(cleaner.clean_html(document)))
-    # Remove blank lines from text
-    text = "\n".join(filter(lambda x: not re.match(r"^\s*$", x), text.splitlines()))
+      # Clean html and get text
+      text = "\n".join(etree.XPath("//text()")(cleaner.clean_html(document)))
+      # Remove blank lines from text
+      text = "\n".join(filter(lambda x: not re.match(r'^\s*$', x), text.splitlines()))
     
-    return text
+      return text
+    
+    return ""
   
   
   def get_match(self, text):
@@ -80,7 +105,7 @@ class EmailSearcher:
     for keyword in self.keywords:
       
       # Create regex pattern used for matching
-      pattern = r"\b{}\b".format(keyword)    
+      pattern = r'\b{}\b'.format(keyword)    
     
       # Get matches for keyword
       matches = re.findall(pattern, text, re.IGNORECASE) 
@@ -131,7 +156,7 @@ class EmailSearcher:
   
   
   def search_inbox(self):
-    
+ 
     # Helper function to remove punctuation
     def clean(s):
       return s.translate(str.maketrans("","", string.punctuation))
@@ -161,19 +186,20 @@ class EmailSearcher:
               
               # Convert string to email message
               msg = email.message_from_bytes(segment[1])            
-              
+ 
               # Get sender and subject
-              sender = clean(msg["from"])
-              subject = clean(msg["subject"])
-              
+              sender = self.decode_header(msg.get("from", ""))
+              subject = self.decode_header(msg.get("subject", ""))
+
               # Get body from email
               text = self.get_text(msg)
               
               # Check for matches in sender, subject, and body
-              match = self.get_msg_match(sender, subject, text)
+              match = self.get_msg_match(clean(sender), clean(subject), text)
               if match != None:
-                sms_message = "From: " + msg["from"]+"\n"
-                sms_message += "Subject: " + msg["subject"]+"\n"
+                keyword, count = match
+                sms_message = "From: {} **{}**\n".format(sender, keyword)
+                sms_message += "Subject: " + subject +"\n"
                 self.send_sms(sms_message)
     
     imap.logout()
@@ -187,7 +213,7 @@ class EmailSearcher:
     
     smtp = smtplib.SMTP(smtp_server, port)
     smtp.ehlo()
-    # Start smtp smtp in TLS mode
+    # Start smtp in TLS mode
     smtp.starttls()
     smtp.ehlo()
     
@@ -231,27 +257,27 @@ def clean_company_name(name):
   name = name.replace("inc", "").replace("llc", "").strip()
   
   return name
+ 
+
+def decode_base64(base64_message, encoding):
   
+  # Decode base64 messages
+  base64_bytes = base64_message.encode(encoding)
+  message_bytes = base64.b64decode(base64_bytes)
+  decoded = message_bytes.decode(encoding)
+  return decoded
+
 
 if __name__ == "__main__":
 
-  login="FULL GMAIL"
+  login="GMAIL LOGIN"
   
   # Decode base64 encoded baseword (for shoulder creeps)  
-  base64_message = "BASE 64 ENCODED PASSWORD"
-  base64_bytes = base64_message.encode("ascii")
-  message_bytes = base64.b64decode(base64_bytes)
-  password = message_bytes.decode("ascii")
-
-  excel_path = "PATH TO EXCEL FILE USED FOR JOB APPLICATIONS"
-  df = pandas.read_excel(excel_path)
-
-  # Get dataframe for pending job applications
-  pending_apps = df.loc[(df["Response"] != "Rejected") & (df["Completed"] == "Yes")]
+  password = decode_base64("BASE 64 ENCODED GMAIL PASSWORD", "ascii")  
 
   # Get names of all companies with pending applications
-  names = [clean_company_name(name) for name in pending_apps["Company"].values]
+  names = ["state farm", "google", "bitwise"]
   
-  a = EmailSearcher(names, login, password, "PHONE NUMBER", "CARRIER")
+  a = EmailSearcher(names, login, password, "PHONE #", "CARRIER")
   # Search inbox for matching company names
   a.search_inbox()  
